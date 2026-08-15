@@ -1,90 +1,63 @@
-# Deploy to Render
+# Deploy to Render (free tier)
 
 Deploy the Google MCP Server (FastAPI + Google Docs/Gmail tools) as a Render
-**Web Service**. Because this app is interactive (OAuth browser login + a
-terminal `Approve? (y/n)` gate), two things need special care on a cloud host:
+**Web Service** on the **free plan**. Two things need special care on a cloud host:
 
 1. `credentials.json` / `token.json` are **files**, not environment variables.
 2. The approval prompt needs a **terminal** — `input()` blocks until someone
    answers, and there is no human at a hosted server's keyboard.
 
-> If you only need the tool endpoints reachable, read the **Workaround** in
-> `server.py` notes below before exposing this publicly.
+> The free plan has an **ephemeral filesystem** and **no persistent disks**, so
+> both files ship as base64 **environment variables** instead.
 
 ---
 
 ## 1. Prepare the code for Render
 
-### A. Load credentials from an environment variable (recommended)
+The repo is already prepared. `auth.py` supports three env vars:
 
-Render has no built-in "secret file upload" for arbitrary files. Encode your
-`credentials.json` as base64 and ship it through an environment variable.
-Add to `auth.py`:
+| Env var | Purpose |
+|---------|---------|
+| `GOOGLE_CLIENT_SECRETS_B64` | base64 of `credentials.json`, decoded on startup |
+| `GOOGLE_TOKEN_B64` | base64 of `token.json`, decoded on startup (free-tier token persistence) |
+| `MCP_APPROVAL` | `1` keep the human gate · `0` auto-approve (use only behind auth) |
 
-```python
-import base64
+Optional path overrides (`CREDS_PATH`, `TOKEN_PATH`) exist for paid plan with a
+persistent disk; **not needed on free**.
 
-def _creds_from_env(raw: str) -> None:
-    """Decode base64-encoded credentials.json content into CREDENTIALS_FILE."""
-    CREDENTIALS_FILE.write_bytes(base64.b64decode(raw))
+---
 
-if os.environ.get("GOOGLE_CLIENT_SECRETS_B64"):
-    _creds_from_env(os.environ["GOOGLE_CLIENT_SECRETS_B64"])
-```
+## 2. Generate the secret values (on YOUR machine)
 
-Generate the value from your local machine:
+### A. base64 of `credentials.json`
 
 ```bash
 python -c "import base64;print(base64.b64encode(open('credentials.json','rb').read()).decode())" > creds.b64
 ```
 
-Then set `GOOGLE_CLIENT_SECRETS_B64` to the contents of `creds.b64` in the
-Render dashboard (see §3). Never commit `creds.b64`.
+Copy the contents of `creds.b64` → this is `GOOGLE_CLIENT_SECRETS_B64`.
 
-### B. Keep `token.json` on a persistent disk
+### B. Generate `token.json` locally (once)
 
-Render's default disk is **ephemeral** — `token.json` written by the OAuth
-flow disappears on restart/redeploy (the refresh token is only re-usable while
-the file exists). Choose one:
-
-- **Paid plan:** add a **Persistent Disk** (Render → Service → Disks), mount at
-  `/var/data`, and set env `TOKEN_PATH=/var/data/token.json` + `CREDS_PATH=/var/data/credentials.json`.
-- **Free/Starter:** the app will re-open the browser OAuth flow on each deploy.
-  You must complete login each time via the terminal workaround below.
-
-Add env-path support to `auth.py`:
-
-```python
-TOKEN_FILE = Path(os.environ.get("TOKEN_PATH", str(Path(__file__).parent / "token.json")))
-CREDENTIALS_FILE = Path(os.environ.get("CREDS_PATH", str(Path(__file__).parent / "credentials.json")))
+```bash
+python make_token.py    # opens browser; sign in, authorize Docs + Gmail (both scopes)
 ```
 
-### C. Make the approval prompt non-blocking (or disable it)
+### C. base64 of `token.json`
 
-On Render you can still type into the service's **Shell tab**, but consumers
-hitting the HTTP endpoint can't answer `input()`. Either:
-
-- Keep the prompt, and use the **Shell tab** to answer `y` when a request comes
-  in (`Approval needed` flow) — workable for manual/testing use only.
-- Add a **config flag** to skip the gate for CI/internal use:
-
-```python
-import os
-APPROVAL_ENABLED = os.environ.get("MCP_APPROVAL", "1") != "0"
-
-async def _needs_approval(action, payload):
-    if not APPROVAL_ENABLED:
-        return True
-    ...  # existing input() path
+```bash
+python -c "import base64;print(base64.b64encode(open('token.json','rb').read()).decode())" > token.b64
 ```
 
-> **Security:** if you disable approval, protect the service with Render's
-> allowed-IPs / a reverse auth proxy. The endpoints write to a real Google
-> account.
+Copy the contents of `token.b64` → this is `GOOGLE_TOKEN_B64`.
+
+> The refresh token embedded in `token.json` stays valid, so Render reloads it
+> from the env var on every cold start and refreshes automatically. Re-running
+> OAuth is only needed if you revoke consent.
 
 ---
 
-## 2. Files that must NOT be in the repo
+## 3. Files that must NOT be in the repo
 
 `.gitignore` already excludes them — keep it that way:
 
@@ -92,17 +65,18 @@ async def _needs_approval(action, payload):
 credentials.json
 token.json
 creds.b64
+token.b64
 .venv/
 __pycache__/
 ```
 
 ---
 
-## 3. Create the Web Service (dashboard)
+## 4. Create the Web Service (dashboard)
 
-1. **Render Dashboard → New → Web Service**, connect your repo.
+1. **Render Dashboard → New → Web Service**, connect your **public** GitHub repo
+   (free tier requires public repos).
 2. Settings:
-   - **Root Directory:** (repo root, e.g. `google-mcp-server/` if your repo is wider)
    - **Environment:** Python
    - **Build Command:** `pip install -r requirements.txt`
    - **Start Command:**
@@ -110,22 +84,22 @@ __pycache__/
      uvicorn server:app --host 0.0.0.0 --port $PORT
      ```
      (Render injects `PORT` automatically.)
-   - **Instance Type:** Free/Starter (Cheap) is fine for a test MCP server.
+   - **Instance Type:** Free.
 3. **Environment Variables:**
    | Name | Value |
    |------|-------|
-   | `GOOGLE_CLIENT_SECRETS_B64` | base64 of your `credentials.json` (from §1.A) |
-   | `TOKEN_PATH` | `/var/data/token.json` |
-   | `CREDS_PATH` | `/var/data/credentials.json` |
-   | `MCP_APPROVAL` | `1` (keep approval) or `0` (disable — with IP protection) |
-4. **Persistent Disk (paid plans only):** attach disk, mount path `/var/data`, size ≥ 1 GB.
-5. **Deploy.**
+   | `GOOGLE_CLIENT_SECRETS_B64` | contents of `creds.b64` (from §2.A) |
+   | `GOOGLE_TOKEN_B64` | contents of `token.b64` (from §2.C) |
+   | `MCP_APPROVAL` | `1` (keep approval) or `0` (auto-approve — protect the endpoint) |
+4. **Deploy.**
 
 ---
 
-## 4. Alternative: `render.yaml` blueprint (Infrastructure-as-Code)
+## 5. Alternative: `render.yaml` blueprint (Infrastructure-as-Code)
 
-Create `render.yaml` in the repo root:
+`render.yaml` is committed in the repo root. Use **New → Blueprint** and pick the
+repo. It defines the free web service, start command, and env vars (`sync: false`
+ones are set in the dashboard after the first deploy).
 
 ```yaml
 services:
@@ -135,56 +109,58 @@ services:
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    autoDeploy: true
     envVars:
       - key: GOOGLE_CLIENT_SECRETS_B64
-        sync: false               # set in dashboard after deploy
+        sync: false
+      - key: GOOGLE_TOKEN_B64
+        sync: false
       - key: MCP_APPROVAL
         value: "1"
-    disk:
-      name: runtime-data
-      mountPath: /var/data
-      sizeGB: 1
 ```
-
-It can't store file contents, so you **still set** `GOOGLE_CLIENT_SECRETS_B64`
-manually in the dashboard the first time.
 
 ---
 
-## 5. Verify
+## 6. Verify
 
-1. After deploy, open your service URL `https://<name>.onrender.com`.
-2. Visit `/docs` (Swagger) to confirm the two endpoints are live.
-3. Generate the token:
+1. Open `https://<name>.onrender.com/docs` — both endpoints should be listed.
+2. (Optional) confirm the token loads: in the **Shell tab** run
    ```bash
-   # in the Render Shell tab (if no persistent disk file exists yet)
    python -c "from auth import authenticate; authenticate(); print('OK')"
    ```
-4. Hit an endpoint once; watch logs for the approval prompt:
+3. Hit an endpoint once; watch logs for the approval prompt:
    ```
    INFO mcp-server: ACTION: append_to_doc
    INFO mcp-server: PAYLOAD: {"doc_id": "...", "content": "..."}
    Approve? (y/n)   # answer in the Shell tab / live logs
    ```
-5. Re-deploy and confirm `token.json` still exists on `/var/data`
-   (persistent disk) — otherwise you'll re-auth.
+4. Re-deploy — no re-auth needed: `GOOGLE_TOKEN_B64` is re-read on startup.
 
 ---
 
-## 6. Troubleshooting
+## 7. Free-tier behavior you should expect
+
+- Service **sleeps after 15 minutes idle**; first request = 30–60 s cold start.
+- 750 instance-hours/month, no credit card required.
+- Filesystem resets on every deploy — fine, the token comes from the env var.
+- Only **public** repos deploy on the free plan.
+
+---
+
+## 8. Troubleshooting
 
 | Symptom | Cause / Fix |
 |---------|-------------|
-| `credentials.json not found.` | `GOOGLE_CLIENT_SECRETS_B64` unset or `auth.py` not updated with the env lookup. |
-| `redirect_uri_mismatch` in browser | `credentials.json` is a **Desktop** OAuth client. For a hosted localhost redirect, create an **OAuth Client ID (Web application)** and add your Render callback, or keep the Desktop flow for manual shell use. |
-| App hangs on `Approve? (y/n)` | No one is answering. Use the **Shell tab** to answer, or set `MCP_APPROVAL=0` (paid/IP-protected scenario). |
-| Token lost after redeploy | Disk is ephemeral → add a persistent disk (§1.B) or re-run OAuth each time. |
+| `credentials.json not found.` | `GOOGLE_CLIENT_SECRETS_B64` unset or empty. |
+| Token/auth hangs on startup | `GOOGLE_TOKEN_B64` unset/empty, so `authenticate()` tries the browser flow. Set the var, or run the Shell-tab OAuth command. |
+| `redirect_uri_mismatch` in browser | `credentials.json` is a **Desktop** OAuth client. Locally this is fine (`run_local_server`). For hosted callback auth, create a **Web application** client instead. |
+| App hangs on `Approve? (y/n)` | No one is answering. Use the **Shell tab**, or set `MCP_APPROVAL=0` + IP allow-list. |
 | `PORT` not bound | Start command must use `--port $PORT`, not a hardcoded `8000`. |
-| 412/403 from Docs/Gmail APIs | Google OAuth consent must include both scopes; re-consent, then check Render logs for the refresh path. |
+| 412/403 from Docs/Gmail APIs | Re-consent both scopes locally and re-generate `token.json` (§2.B/C). |
 
 ---
 
-## 7. Known limitation
+## 9. Known limitation
 
 The `input()` approval is fundamentally a **human-in-the-loop terminal**
 feature. On a hosted web service it only works interactively through Render's

@@ -61,8 +61,15 @@ Each request is only executed after you type `y` at the
 
 Interactive docs: http://127.0.0.1:8000/docs
 
+## Deploy to Render (free tier)
+
+See [`deployment.md`](deployment.md) for the full walkthrough. In short:
+`credentials.json` and `token.json` are shipped as base64 env vars
+(`GOOGLE_CLIENT_SECRETS_B64`, `GOOGLE_TOKEN_B64`); `render.yaml` defines the
+free web service. Set `MCP_APPROVAL=0` to disable the human gate.
+
 ## Security notes
 
-- `credentials.json` and `token.json` are **never committed** (see `.gitignore`).
-- Every destructive/external action requires explicit human approval.
+- `credentials.json`, `token.json`, `creds.b64`, `token.b64` are **never committed** (see `.gitignore`).
+- Every destructive/external action requires explicit human approval unless `MCP_APPROVAL=0`.
 - Runs locally only (`127.0.0.1`); bind to `0.0.0.0` only behind TLS/auth.

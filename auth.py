@@ -28,6 +28,14 @@ _CREDS_B64 = os.environ.get("GOOGLE_CLIENT_SECRETS_B64")
 if _CREDS_B64:
     CREDENTIALS_FILE.write_bytes(base64.b64decode(_CREDS_B64))
 
+# Optional: decode base64 token from env (Render deploys). Free tier has an
+# ephemeral filesystem, so token.json is shipped via GOOGLE_TOKEN_B64 instead
+# of a persistent disk. Only written when the token file is missing, so local
+# dev (which has a real token.json) is unaffected.
+_TOKEN_B64 = os.environ.get("GOOGLE_TOKEN_B64")
+if _TOKEN_B64 and not TOKEN_FILE.exists():
+    TOKEN_FILE.write_bytes(base64.b64decode(_TOKEN_B64))
+
 
 def _build_service(service_name: str, version: str):
     """Build an authorized Google API service client (Docs or Gmail)."""
