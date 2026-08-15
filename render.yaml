@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: google-mcp-server
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GOOGLE_CLIENT_SECRETS_B64
+        sync: false
+      - key: MCP_APPROVAL
+        value: "1"
+    disk:
+      name: runtime-data
+      mountPath: /var/data
+      sizeGB: 1
