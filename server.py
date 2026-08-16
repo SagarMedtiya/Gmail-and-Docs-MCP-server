@@ -46,7 +46,15 @@ def _request_approval(action: str, payload: dict) -> bool:
     if not APPROVAL_ENABLED:
         logger.warning("MCP_APPROVAL=0 — auto-approving action %s", action)
         return True
-    answer = input("Approve? (y/n) > ").strip().lower()
+    try:
+        answer = input("Approve? (y/n) > ").strip().lower()
+    except EOFError:
+        logger.error(
+            "approval prompt needs an interactive terminal (none present). "
+            "Set MCP_APPROVAL=0 to auto-approve; action %s rejected.",
+            action,
+        )
+        return False
     return answer == "y"
 
 
